@@ -1,0 +1,172 @@
+from cvzone.HandTrackingModule import HandDetector
+import cv2
+import os
+import numpy as np
+import time  # Import time module for controlling cooldown
+
+# Parameters
+width, height = 1280, 720
+gestureThreshold = 300  # The position of the threshold line (y-coordinate)
+folderPath = r"C:\Users\radhi\Downloads\VIRTUAL-AI-MOUSE-USING-PYTHON"  # Adjust the path if necessary
+
+# Camera Setup
+cap = cv2.VideoCapture(0)
+cap.set(3, width)
+cap.set(4, height)
+
+# Hand Detector
+detectorHand = HandDetector(detectionCon=0.8, maxHands=1)
+
+# Variables
+imgList = []
+delay = 30
+buttonPressed = False
+counter = 0
+drawMode = False
+imgNumber = 0
+delayCounter = 0
+annotations = [[]]
+annotationNumber = -1
+annotationStart = False
+hs, ws = int(120 * 1), int(213 * 1)  # width and height of small image
+
+# Cooldown for slide transitions (in seconds)
+last_slide_time = time.time()  # Track the last slide time
+
+# Get list of presentation images
+pathImages = sorted(os.listdir(folderPath), key=len)
+if not pathImages:
+    print("No images found in the specified folder.")
+    exit()
+print(f"Loaded images: {pathImages}")
+
+
+# Function to resize image while maintaining aspect ratio
+def resize_image(img, target_width, target_height):
+    img_height, img_width, _ = img.shape
+    aspect_ratio = img_width / img_height
+
+    if img_width > target_width or img_height > target_height:
+        if img_width > img_height:
+            new_width = target_width
+            new_height = int(target_width / aspect_ratio)
+        else:
+            new_height = target_height
+            new_width = int(target_height * aspect_ratio)
+    else:
+        new_width, new_height = img_width, img_height
+
+    return cv2.resize(img, (new_width, new_height))
+
+
+while True:
+    # Get image frame
+    success, img = cap.read()
+    if not success:
+        print("Error: Could not access the webcam.")
+        break
+
+    img = cv2.flip(img, 1)
+
+    # Get the current image from the folder path
+    pathFullImage = os.path.join(folderPath, pathImages[imgNumber])
+    print(f"Loading image: {pathFullImage}")
+
+    imgCurrent = cv2.imread(pathFullImage)
+
+    if imgCurrent is None:
+        print(f"Error: Could not load image {pathFullImage}")
+        continue
+
+    # Resize the image to fit the display window
+    imgCurrent = resize_image(imgCurrent, width, height)
+
+    # Find the hand and its landmarks
+    hands, img = detectorHand.findHands(img)  # with draw
+
+    # Draw the Gesture Threshold Line (Green Margin)
+    cv2.line(img, (0, gestureThreshold), (width, gestureThreshold), (0, 255, 0), 10)  # Green line at y = 300
+
+    if hands:
+        hand = hands[0]
+        cx, cy = hand["center"]
+        lmList = hand["lmList"]  # List of 21 Landmark points
+        fingers = detectorHand.fingersUp(hand)  # List of which fingers are up
+
+        # Print to check if landmarks are detected
+        print(f"Landmarks: {lmList}")
+        print(f"Fingers: {fingers}")
+
+        # Constrain values for easier drawing
+        xVal = int(np.interp(lmList[8][0], [width // 2, width], [0, width]))
+        yVal = int(np.interp(lmList[8][1], [150, height - 150], [0, height]))
+        indexFinger = xVal, yVal
+
+        if cy <= gestureThreshold:  # If hand is at the height of the face (above green threshold line)
+            if fingers == [1, 0, 0, 0, 0]:  # Left Gesture
+                current_time = time.time()
+                if current_time - last_slide_time > 2:  # Only execute after a 2-second delay
+                    print("Left Gesture")
+                    buttonPressed = True
+                    if imgNumber > 0:
+                        imgNumber -= 1
+                    last_slide_time = current_time  # Update the time of the last slide transition
+                    annotations = [[]]
+                    annotationNumber = -1
+                    annotationStart = False
+
+            if fingers == [0, 0, 0, 0, 1]:  # Right Gesture
+                current_time = time.time()
+                if current_time - last_slide_time > 2:  # Only execute after a 2-second delay
+                    print("Right Gesture")
+                    buttonPressed = True
+                    if imgNumber < len(pathImages) - 1:
+                        imgNumber += 1
+                    last_slide_time = current_time  # Update the time of the last slide transition
+                    annotations = [[]]
+                    annotationNumber = -1
+                    annotationStart = False
+
+        if fingers == [0, 1, 1, 0, 0]:
+            cv2.circle(imgCurrent, indexFinger, 12, (0, 0, 255), cv2.FILLED)
+
+        if fingers == [0, 1, 0, 0, 0]:
+            if annotationStart is False:
+                annotationStart = True
+                annotationNumber += 1
+                annotations.append([])
+            annotations[annotationNumber].append(indexFinger)
+            cv2.circle(imgCurrent, indexFinger, 12, (0, 0, 255), cv2.FILLED)
+        else:
+            annotationStart = False
+
+        if fingers == [0, 1, 1, 1, 0]:
+            if annotations:
+                annotations.pop(-1)
+                annotationNumber -= 1
+                buttonPressed = True
+
+    else:
+        annotationStart = False
+
+    # Drawing annotations
+    for i, annotation in enumerate(annotations):
+        for j in range(len(annotation)):
+            if j != 0:
+                cv2.line(imgCurrent, annotation[j - 1], annotation[j], (0, 0, 200), 12)
+
+    imgSmall = cv2.resize(img, (ws, hs))
+    h, w, _ = imgCurrent.shape
+    imgCurrent[0:hs, w - ws: w] = imgSmall
+
+    # Display the resized image and camera feed
+    cv2.imshow("Slides", imgCurrent)
+    cv2.imshow("Image", img)
+
+    key = cv2.waitKey(1)
+    if key == ord('q'):
+        break
+
+# Release resources
+cap.release()
+cv2.destroyAllWindows()
